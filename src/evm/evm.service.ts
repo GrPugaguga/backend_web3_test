@@ -18,7 +18,6 @@ export class EvmService {
 
   async getBlockByHeight(height: number) {
     const hexHeight = '0x' + height.toString(16);
-    // один вызов!
     const b = await this.rpcCall('eth_getBlockByNumber', [hexHeight, false]);
     if (!b) throw new Error('Block not found');
 

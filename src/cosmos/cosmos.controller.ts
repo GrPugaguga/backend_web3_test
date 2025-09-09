@@ -14,6 +14,6 @@ export class CosmosController {
 
   @Get('transactions/:hash')
   getTx(@Param() p: GetCosmosTxDto) {
-    return this.svc.getTxByHash(p.hash.toUpperCase()); // tendermint обычно верхним регистром
+    return this.svc.getTxByHash(p.hash.toUpperCase()); 
   }
 }
