@@ -1,81 +1,100 @@
 import axios from 'axios';
-import { Injectable } from '@nestjs/common';
+import { fromBase64 } from "@cosmjs/encoding";
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 
 @Injectable()
 export class CosmosService {
-  private tendermint = process.env.COSMOS_TENDERMINT_RPC!;
-  private rest = process.env.COSMOS_GRPC_REST!;
+  private baseUrl = process.env.COSMOS_TENDERMINT_REST!;
+
+  private async restGet<T>(path: string, notFoundMessage: string): Promise<T> {
+    if (!this.baseUrl) {
+      throw new ServiceUnavailableException('COSMOS_TENDERMINT_REST is not configured');
+    }
+    try {
+      const { data } = await axios.get(`${this.baseUrl}${path}`);
+      return data as T;
+    } catch (e: any) {
+      if (e?.response?.status === 404) {
+        throw new NotFoundException(notFoundMessage);
+      }
+      throw new InternalServerErrorException(e?.message || 'Cosmos REST request failed');
+    }
+  }
 
   async getBlockByHeight(height: number) {
-    try {
-      const { data } = await axios.get(
-        `${this.rest}/cosmos/base/tendermint/v1beta1/blocks/${height}`
-      );
+    const data = await this.restGet<any>(
+      `/cosmos/base/tendermint/v1beta1/blocks/${height}`,
+      'Block not found',
+    );
 
-      const hdr = data.block.header;
-      const hash = data.block_id?.hash || null;
-      return {
-        height: Number(hdr.height),
-        time: hdr.time,          
-        hash,
-        proposedAddress: hdr.proposer_address, 
-      };
-    } catch {
-      const { data } = await axios.get(`${this.tendermint}/block?height=${height}`);
-      const hdr = data.result.block.header;
-      const hash = data.result.block_id?.hash || null;
-      return {
-        height: Number(hdr.height),
-        time: hdr.time,
-        hash,
-        proposedAddress: hdr.proposer_address,
-      };
+    const header = data?.block?.header;
+    const hash = data?.block_id?.hash;
+    if (!header || !hash || !header.height || !header.time) {
+      throw new NotFoundException('Block not found');
     }
-  }
 
+    return {
+      height: Number(header.height),
+      time: header.time,
+      hash,
+      proposedAddress: header.proposer_address ?? null,
+    };
+  }
 
   async getTxByHash(hash: string) {
-    try {
-      const { data } = await axios.get(`${this.rest}/cosmos/tx/v1beta1/txs/${hash}`);
-      const txr = data.tx_response;
-      const tx = data.tx;
+    const data = await this.restGet<any>(
+      `/cosmos/tx/v1beta1/txs/${hash}`,
+      'Transaction not found',
+    );
 
-      const feeCoins = tx?.auth_info?.fee?.amount || [];
-      const fee = feeCoins.map((c: any) => `${c.amount}${c.denom}`).join(',');
+    const txr = data?.tx_response;
+    if (!txr) throw new NotFoundException('Transaction not found');
 
-      let sender: string | null = null;
-      const msgs = tx?.body?.messages || [];
-      if (msgs.length) {
-        const m0 = msgs[0];
-        sender =
-          m0.sender ||
-          m0.from_address ||
-          m0.signer ||
-          null;
-      }
+    const tx = data?.tx;
+    const gasUsed = txr.gas_used ?? null;
+    const gasWanted = txr.gas_wanted ?? null;
+    const time = txr.timestamp ?? null;
+    const heightNum = txr.height ? Number(txr.height) : null;
 
-      return {
-        hash: txr.txhash,
-        height: Number(txr.height),
-        time: txr.timestamp,                
-        gasUsed: Number(txr.gas_used),
-        gasWanted: Number(txr.gas_wanted),
-        fee,
-        sender,
-      };
-    } catch {
-      const tendermintHash = '0x' + hash.toUpperCase();
-      const { data } = await axios.get(`${this.tendermint}/tx?hash=${tendermintHash}`);
-      const r = data.result;
-      return {
-        hash,
-        height: Number(r.height),
-        time: null,
-        gasUsed: Number(r.tx_result?.gas_used ?? 0),
-        gasWanted: Number(r.tx_result?.gas_wanted ?? 0),
-        fee: null,
-        sender: null,
-      };
+    const feeCoins: Array<{ amount: string; denom: string }> | undefined = tx?.auth_info?.fee?.amount;
+    const fee = Array.isArray(feeCoins) && feeCoins.length > 0
+      ? feeCoins.map((c) => `${String(c.amount)}${String(c.denom)}`).join(', ')
+      : 0;
+
+    let sender: string | null = null;
+    const evts = Array.isArray(txr.events) ? txr.events : [];
+    const signerEvt = evts.find(e => e.type === 'signer');
+    if (signerEvt && Array.isArray(signerEvt.attributes)) {
+      try {
+        for (const attr of signerEvt.attributes) {
+          const kBytes = fromBase64(String(attr.key));
+          const vBytes = fromBase64(String(attr.value));
+          const key = Buffer.from(kBytes).toString('utf8');
+          const value = Buffer.from(vBytes).toString('utf8');
+          if (key === 'sei_addr') {
+            sender = value;
+            break;
+          }
+        }
+      } catch {}
     }
+
+    if (!txr.txhash) throw new NotFoundException('Transaction not found');
+
+    return {
+      hash: txr.txhash,
+      height: heightNum,
+      time,
+      gasUsed,
+      gasWanted,
+      fee,
+      sender,
+    };
   }
+
 }
