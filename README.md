@@ -14,4 +14,4 @@ https://backendweb3test-production.up.railway.app/docs
   также получаем пустой массив вместо fee, из сдк по итогу использовал только { decodeTxRaw } from "@cosmjs/proto-signing" , чтобы декодировать event signer для получения отправителя 
 
 Задача 2 - выполненно 
-  Весь код записан в отдельном мд файле task 2 
+  Весь код записан в отдельном файле Task_2.sql
